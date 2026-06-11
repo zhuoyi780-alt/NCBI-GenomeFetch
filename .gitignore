@@ -1,0 +1,47 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.wheel-test/
+
+# Build and packaging output
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+.venv-wheel-test/
+venv/
+env/
+
+# Local runtime outputs
+*.log
+.progress_state.json
+.accession_progress_state.json
+.accession_manifest.json
+md5_failed_files.txt
+md5_autofix_report.*
+downloads/
+genomes/
+*_split/
+
+# External NCBI Datasets binaries should be installed by users, not committed.
+datasets
+datasets.exe
+
+# Large generated example data from local runs
+examples/split_example/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/

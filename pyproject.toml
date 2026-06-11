@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ncbi-genomefetch"
+version = "1.0.0"
+description = "A command-line tool for batch downloading genome data from NCBI using taxonomy names"
+readme = "README.md"
+license = "MIT"
+authors = [
+    {name = "NCBI-GenomeFetch Team"}
+]
+keywords = ["bioinformatics", "genomics", "ncbi", "taxonomy", "genome-download"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+requires-python = ">=3.8"
+
+[project.scripts]
+ncbi-genomefetch = "taxonomy_downloader.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/zhuoyi780-alt/NCBI-GenomeFetch"
+Repository = "https://github.com/zhuoyi780-alt/NCBI-GenomeFetch"
+Issues = "https://github.com/zhuoyi780-alt/NCBI-GenomeFetch/issues"
+Documentation = "https://github.com/zhuoyi780-alt/NCBI-GenomeFetch/blob/main/README.md"
+
+[tool.setuptools.packages.find]
+include = ["taxonomy_downloader*"]
+
+[tool.setuptools.package-data]
+taxonomy_downloader = ["*.txt", "*.md"]
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true

@@ -1,0 +1,9 @@
+# Example TaxID input file
+# One TaxID per line
+# TaxIDs are numeric identifiers from NCBI Taxonomy
+
+511145
+224308
+170187
+83332
+1421540
