@@ -1,39 +1,33 @@
-﻿# NCBI-GenomeFetch v1.0.0
+# NCBI-GenomeFetch v1.0.0
 
-从 NCBI 批量下载基因组数据的命令行工具。支持三种工作模式：
-- **Taxon 模式**：按分类名称或 TaxID 下载基因组
-- **Accession 模式**：按 Accession 号批量下载基因组（支持断点续传）
-- **分割模式**：将大型下载任务智能分割为子任务（支持菌株级基因组统计）
+NCBI-GenomeFetch is a command-line tool for batch downloading genome data from
+NCBI. It supports three workflows:
 
-## 版本亮点 (v1.0.0)
+- Taxon mode: download genomes by taxonomy name or TaxID.
+- Accession mode: download genomes by accession list with resumable batches.
+- Split mode: split large taxonomy download jobs into smaller task files.
 
-✅ **MD5自动修复**: MD5验证失败后自动重新下载并修复文件  
-✅ **智能路径匹配**: 使用md5sum目录上下文，避免同名文件冲突  
-✅ **文件名标准化**: 自动应用文件名简化规则，保持一致性  
-✅ **发布烟测**: 提供基础导入、CLI help 和源码编译检查  
-✅ **断点续传**: Accession 模式支持自动恢复  
+## Contents
 
-## 目录
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Workflows](#workflows)
+- [Command Line Reference](#command-line-reference)
+- [Resume Support](#resume-support)
+- [Input File Formats](#input-file-formats)
+- [Output Layout](#output-layout)
+- [Performance](#performance)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
 
-- [安装](#安装)
-- [快速开始](#快速开始)
-- [工作模式](#工作模式)
-- [命令行参数](#命令行参数)
-- [断点续传](#断点续传)
-- [输入文件格式](#输入文件格式)
-- [输出结构](#输出结构)
-- [性能优化](#性能优化)
-- [故障排除](#故障排除)
-  - [手动补充失败的物种](#7-手动补充失败的物种)
+## Installation
 
-## 安装
+### Requirements
 
-### 系统要求
+- Python 3.8 or later
+- NCBI Datasets CLI 16.0.0 or later
 
-- Python 3.8+
-- NCBI datasets 工具 16.0.0+
-
-### 安装 NCBI datasets 工具
+### Install the NCBI Datasets CLI
 
 ```bash
 # Windows
@@ -47,650 +41,474 @@ chmod +x datasets
 curl -o datasets https://ftp.ncbi.nlm.nih.gov/pub/datasets/command-line/v2/mac/datasets
 chmod +x datasets
 
-# 或使用 conda
+# Conda
 conda install -c conda-forge ncbi-datasets-cli
 ```
 
-### 安装 Python 包
+### Install NCBI-GenomeFetch
+
+From the repository root:
 
 ```bash
-# 从源码目录安装
 pip install .
 ```
 
-### 验证安装
+### Verify the installation
 
 ```bash
-datasets --version    # 需要 16.0.0+
-python --version      # 需要 3.8+
+datasets --version
+python --version
+ncbi-genomefetch --help
 ```
 
-## 快速开始
+## Quick Start
 
-### Taxon 模式（按分类下载）
+### Taxon mode
 
 ```bash
-# 创建输入文件（推荐使用 TaxID）
-echo "562" > taxa.txt      # E. coli
-echo "1423" >> taxa.txt    # B. subtilis
+# Create an input file. TaxIDs are recommended.
+echo "562" > taxa.txt
+echo "1423" >> taxa.txt
 
-# 基本下载
+# Download genomes.
 ncbi-genomefetch -i taxa.txt -o genomes/
 
-# 推荐配置（API 密钥 + 多线程）
+# Use an NCBI API key and more workers.
 ncbi-genomefetch -i taxa.txt -o genomes/ -k YOUR_API_KEY -w 8
 
-# 或使用安装后的命令
-ncbi-genomefetch -i taxa.txt -o genomes/
-
-# 下载多种文件类型
+# Download multiple data types.
 ncbi-genomefetch -i taxa.txt -o genomes/ --include genome,protein,gff3
 ```
 
-### Accession 模式（按编号下载，支持断点续传）
+### Accession mode
 
 ```bash
-# 创建 accession 文件
+# Create an accession file.
 echo "GCF_000005845.2" > accessions.txt
 echo "GCF_000009045.1" >> accessions.txt
 
-# 批量下载（自动断点续传）
+# Download by accession list.
 ncbi-genomefetch -a accessions.txt -o genomes/
 
-# 自定义批次大小
+# Tune batch size and workers.
 ncbi-genomefetch -a accessions.txt -o genomes/ -b 50 -w 4
 
-# 中断后恢复：直接重新运行相同命令
-# 工具会自动检测已完成的 accessions 并跳过
+# Resume after interruption by rerunning the same command.
 ncbi-genomefetch -a accessions.txt -o genomes/
 ```
 
-### 分割模式（处理大型数据集）
+### Split mode
 
 ```bash
-# 分割 Bacteria 数据集
+# Split a large taxon into smaller task files.
 ncbi-genomefetch -s Bacteria -o Bacteria_split/
 
-# 使用分割结果下载
+# Use the split results as taxon-mode inputs.
 ncbi-genomefetch -i Bacteria_split/group1.txt -o downloads/group1/
 ```
 
-## 工作模式
+## Workflows
 
-### 1. Taxon 模式 (`-i/--input`)
+### Taxon mode: `-i/--input`
 
-按分类名称或 TaxID 下载基因组，使用 NCBI datasets 的脱水/再水化工作流程。
+Taxon mode downloads genome data by taxonomy name or TaxID through the NCBI
+Datasets dehydration and rehydration workflow.
 
-**特点**：
-- ✅ 支持分类名称和 TaxID
-- ✅ 自动包含菌株级基因组
-- ✅ 支持多种文件类型（genome, protein, gff3, cds 等）
-- ✅ 进度跟踪和断点续传
+Main behavior:
 
-**工作流程**：
-1. 下载脱水包（dehydrated package）
-2. 再水化（rehydrate）获取实际数据
-3. 组织文件到输出目录
-4. 生成 MD5 校验和
+- Accepts taxonomy names and TaxIDs.
+- Supports multiple data types, including genome, protein, gff3, cds, gbff,
+  and sequence reports.
+- Tracks progress in `.progress_state.json`.
+- Can validate existing output before skipping completed taxa.
+- Generates taxonomy reports and MD5 checksum files.
 
-**示例**：
+Example:
+
 ```bash
-# 使用 TaxID（推荐）
-ncbi-genomefetch -i taxa.txt -o genomes/
-
-# 下载多种文件类型
 ncbi-genomefetch -i taxa.txt -o genomes/ --include genome,protein,gff3
-
-# 仅下载参考基因组
-ncbi-genomefetch -i taxa.txt -o genomes/ --additional-params reference=true
 ```
 
-### 2. Accession 模式 (`-a/--accession-file`)
+### Accession mode: `-a/--accession`
 
-按 Accession 号批量下载基因组，支持自动断点续传。
+Accession mode downloads genome data for a list of GCA or GCF accessions.
 
-**特点**：
-- ✅ 批量处理 accessions
-- ✅ 自动断点续传（中断后恢复）
-- ✅ 并行下载（可配置线程数）
-- ✅ 自动去重
-- ✅ 文件名标准化（`{accession}.{extension}`）
+Main behavior:
 
-**断点续传机制**：
-- 进度保存在 `.accession_progress_state.json`
-- 每个批次完成后自动保存进度
-- 中断后重新运行相同命令即可恢复
-- 自动跳过已完成的 accessions
-- 如需仅信任进度 JSON、不检查输出文件是否存在，可添加 `--no-validate-resume-files`
-- 完成后自动清理状态文件
+- Processes accessions in batches.
+- Saves progress in `.accession_progress_state.json`.
+- Skips completed accessions when rerun.
+- Standardizes output file names as `{accession}.{extension}`.
+- Rebuilds merged MD5 metadata for downloaded files.
 
-**工作流程**：
-1. 读取 accession 列表
-2. 检查已完成的 accessions（如果有）
-3. 分批下载剩余 accessions
-4. 每批完成后保存进度
-5. 生成合并的 MD5 文件
+Example:
 
-**示例**：
 ```bash
-# 基本下载
-ncbi-genomefetch -a accessions.txt -o genomes/
-
-# 自定义批次大小和线程数
 ncbi-genomefetch -a accessions.txt -o genomes/ -b 100 -w 8
-
-# 中断后恢复（直接重新运行）
-ncbi-genomefetch -a accessions.txt -o genomes/
-
-# 仅根据 .accession_progress_state.json 续传，不验证输出文件
-ncbi-genomefetch -a accessions.txt -o genomes/ --no-validate-resume-files
-
-# 查看进度状态
-cat genomes/.accession_progress_state.json
 ```
 
-### 3. 分割模式 (`-s/--split`)
+### Split mode: `-s/--split`
 
-将大型分类（如 Bacteria）智能分割为多个子任务，便于分布式下载。
+Split mode partitions large taxonomy datasets into smaller task files for
+distributed or staged downloads.
 
-**功能特性**：
-- ✅ 自动识别菌株级基因组（即使物种本身没有基因组）
-- ✅ 输出文件包含物种及其所有子节点（菌株、亚种等）
-- ✅ 统计更准确：物种数统计物种级节点，基因组数包含所有节点
+Input data folder requirements:
 
-**前置要求**：
-准备 `{taxon}/` 文件夹，包含：
-- `{taxon}.tsv` - 基因组组装报告
-- `taxonomy_report.jsonl` - 分类学报告
+- `{taxon}.tsv`: genome assembly report
+- `taxonomy_report.jsonl`: taxonomy report
 
-**示例**：
+Example:
+
 ```bash
-# 分割 Bacteria
 ncbi-genomefetch -s Bacteria -o Bacteria_split/
-
-# 交互式配置
-# 1. 选择分类学水平（推荐 Genus 或 Species）
-# 2. 是否过滤非正式命名（y/n）
-# 3. 数据库来源（refseq/genbank/all）
-# 4. 每组大小（Gb）
-
-# 使用分割结果
-ncbi-genomefetch -i Bacteria_split/group1.txt -o downloads/group1/
 ```
 
-## 命令行参数
+## Command Line Reference
 
-### 模式选择（三选一）
+### Mode selection
 
-| 参数 | 说明 | 示例 |
-|------|------|------|
-| `-i FILE` | Taxon 模式：按分类下载 | `-i taxa.txt` |
-| `-a FILE` | Accession 模式：按编号下载 | `-a accessions.txt` |
-| `-s TAXON` | 分割模式：分割大型数据集 | `-s Bacteria` |
+| Option | Description | Example |
+| --- | --- | --- |
+| `-i FILE`, `--input FILE` | Taxon mode input file | `-i taxa.txt` |
+| `-a FILE`, `--accession FILE` | Accession mode input file | `-a accessions.txt` |
+| `-s TAXON`, `--split TAXON` | Split mode for a taxon or taxon folder | `-s Bacteria` |
+| `--md5sum DIRECTORY` | Verify MD5 checksums in a directory | `--md5sum genomes/` |
+| `--md5sum-auto-fix [FILE]` | Redownload and repair failed MD5 entries | `--md5sum-auto-fix` |
+| `--rebuild-md5` | Rebuild accession MD5 metadata from a dehydrated package | `--rebuild-md5` |
 
-### 基本参数
+### Common options
 
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `-o DIR` | 输出目录 | 必需 |
-| `-k KEY` | NCBI API 密钥 | 无 |
-| `-w N` | 并行线程数 | 2 |
-| `-b N` | 批次大小（Accession 模式） | 100 |
-| `--datasets-exe PATH` | datasets 工具路径 | `datasets` |
-| `--temp-dir DIR` | 临时文件目录 | 系统默认 |
-| `--md5sum DIR` | 对指定目录执行MD5校验，失败文件保存到当前目录 | - |
-| `--md5sum-auto-fix [FILE]` | 自动修复失败文件。可独立使用（读取md5_failed_files.txt）或与--md5sum联合使用 | `md5_failed_files.txt` |
+| Option | Description | Default |
+| --- | --- | --- |
+| `-o DIR`, `--output DIR` | Output directory | Required for download modes |
+| `-k KEY`, `--api-key KEY` | NCBI API key | Not set |
+| `-w N`, `--workers N` | Number of worker threads | `2` |
+| `-b N`, `--batch N` | Accessions per batch | `100` |
+| `--temp-dir DIR` | Temporary directory | System default |
+| `--datasets-exe PATH` | Path to the NCBI Datasets executable | `datasets` |
+| `--include TYPES` | Comma-separated data types | `genome` |
+| `--assembly-source SRC` | Assembly source filter | Not set |
+| `--additional-params PARAMS` | Extra Datasets CLI filters | Not set |
+| `--no-validate-resume-files` | Trust progress state without checking output files | Disabled |
 
-### 数据类型参数
+### Data type options
 
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `--include TYPE` | 下载的文件类型 | `genome` |
-| `--assembly-source SRC` | 数据库来源 | `all` |
-| `--additional-params PARAMS` | 额外过滤参数 | 无 |
+`--include` accepts:
 
-**`--include` 可选值**：
-- `genome` - 基因组序列（默认）
-- `protein` - 蛋白质序列
-- `rna` - RNA 序列
-- `cds` - CDS 序列（使用 `.cds.fna` 扩展名）
-- `gff3` - GFF3 注释
-- `gtf` - GTF 注释
-- `gbff` - GenBank 格式
-- `seq-report` - 序列报告
-- `none` - 仅元数据
+- `genome`
+- `protein`
+- `rna`
+- `cds`
+- `gff3`
+- `gtf`
+- `gbff`
+- `seq-report`
+- `none`
 
-**组合使用**：
+Examples:
+
 ```bash
-# 下载基因组 + 蛋白质 + 注释
---include genome,protein,gff3
-
-# 下载所有类型
---include genome,protein,rna,cds,gff3,gtf,gbff,seq-report
+ncbi-genomefetch -i taxa.txt -o genomes/ --include genome,protein,gff3
+ncbi-genomefetch -i taxa.txt -o genomes/ --include genome,protein,rna,cds,gff3,gtf,gbff,seq-report
 ```
 
-**`--assembly-source` 可选值**：
-- `all` - RefSeq 和 GenBank（默认）
-- `refseq` - 仅 RefSeq
-- `genbank` - 仅 GenBank
+### Assembly source options
 
-**`--additional-params` 示例**：
+`--assembly-source` accepts:
+
+- `refseq`
+- `genbank`
+- `all`
+
+Examples:
+
 ```bash
-# 仅参考基因组
---additional-params reference=true
-
-# 仅完整装配的注释基因组
---additional-params assembly-level=complete,annotated=true
-
-# 组合过滤
---additional-params reference=true,annotated=true,assembly-level=complete
+ncbi-genomefetch -i taxa.txt -o genomes/ --assembly-source refseq
+ncbi-genomefetch -i taxa.txt -o genomes/ --assembly-source genbank
 ```
 
-### 性能参数
+### Additional Datasets filters
 
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `--disable-disk-backoff` | 禁用磁盘空间动态回退 | false |
-| `--disk-warning-threshold PERCENT` | 磁盘空间警告比例阈值 | 0.20 |
-| `--disk-critical-threshold PERCENT` | 磁盘空间严重比例阈值 | 0.10 |
-| `--disk-minimum-threshold PERCENT` | 暂停新任务的最低比例阈值 | 0.05 |
-| `--disk-warning-bytes SIZE` | 磁盘空间警告绝对阈值 | 10GB |
-| `--disk-critical-bytes SIZE` | 磁盘空间严重绝对阈值 | 5GB |
-| `--disk-minimum-bytes SIZE` | 暂停新任务的最低绝对阈值 | 1GB |
+Use `--additional-params` for extra key-value filters passed to the Datasets
+command.
 
-## 断点续传
-
-### MD5校验与自动修复
-
-**三种使用方式**：
-
-#### 1. 仅MD5校验（生成失败文件列表）
 ```bash
-# 校验指定目录，失败文件信息保存到当前目录的 md5_failed_files.txt
+ncbi-genomefetch -i taxa.txt -o genomes/ --additional-params reference=true
+ncbi-genomefetch -i taxa.txt -o genomes/ --additional-params assembly-level=complete,annotated=true
+```
+
+### Disk space backoff
+
+| Option | Description | Default |
+| --- | --- | --- |
+| `--disable-disk-backoff` | Disable dynamic disk-space backoff | Disabled |
+| `--disk-warning-threshold PERCENT` | Warning free-space percentage threshold | `0.20` |
+| `--disk-critical-threshold PERCENT` | Critical free-space percentage threshold | `0.10` |
+| `--disk-minimum-threshold PERCENT` | Pause threshold as free-space percentage | `0.05` |
+| `--disk-warning-bytes SIZE` | Warning free-space byte threshold | `10GB` |
+| `--disk-critical-bytes SIZE` | Critical free-space byte threshold | `5GB` |
+| `--disk-minimum-bytes SIZE` | Pause threshold as free bytes | `1GB` |
+| `--disk-check-interval SECONDS` | Disk check interval | `30` |
+
+Examples:
+
+```bash
+ncbi-genomefetch -i taxa.txt -o genomes/ --disk-warning-bytes 20GB
+ncbi-genomefetch -i taxa.txt -o genomes/ --disk-minimum-bytes 5GB
+ncbi-genomefetch -i taxa.txt -o genomes/ --disable-disk-backoff
+```
+
+## Resume Support
+
+### Taxon mode
+
+Taxon mode stores progress in:
+
+```text
+{output_dir}/.progress_state.json
+```
+
+Rerun the same command to continue from saved progress:
+
+```bash
+ncbi-genomefetch -i taxa.txt -o genomes/
+```
+
+Use this option to trust the progress file without validating output files:
+
+```bash
+ncbi-genomefetch -i taxa.txt -o genomes/ --no-validate-resume-files
+```
+
+### Accession mode
+
+Accession mode stores progress in:
+
+```text
+{output_dir}/.accession_progress_state.json
+```
+
+Rerun the same command to continue remaining accessions:
+
+```bash
+ncbi-genomefetch -a accessions.txt -o genomes/
+```
+
+## MD5 Verification and Repair
+
+### Verify checksums
+
+```bash
 ncbi-genomefetch --md5sum genomes/
-
-# 输出文件：
-# - genomes/md5_verification_report.txt  # 完整校验报告
-# - ./md5_failed_files.txt               # 失败文件列表（在当前运行目录）
 ```
 
-#### 2. 仅自动修复（读取失败文件列表）
+The command writes a verification report and a failed-file list when failures
+are found.
+
+### Repair from a failed-file list
+
 ```bash
-# 从默认位置读取失败文件列表并修复（当前目录的 md5_failed_files.txt）
 ncbi-genomefetch --md5sum-auto-fix
-
-# 从自定义位置读取失败文件列表
-ncbi-genomefetch --md5sum-auto-fix /path/to/custom_failed_files.txt
-
-# 工具会自动：
-# 1. 读取失败文件列表
-# 2. 提取Accession标识符
-# 3. 重新下载失败的文件
-# 4. 应用文件名简化规则
-# 5. 整理到原始路径
-# 6. 重新验证并生成报告
+ncbi-genomefetch --md5sum-auto-fix custom_failed_files.txt
 ```
 
-#### 3. 一站式校验和修复
+### Verify and repair in one run
+
 ```bash
-# 校验并自动修复，失败文件列表保存到默认位置
 ncbi-genomefetch --md5sum genomes/ --md5sum-auto-fix
-
-# 校验并自动修复，失败文件列表保存到自定义位置
-ncbi-genomefetch --md5sum genomes/ --md5sum-auto-fix custom_failed.txt
+ncbi-genomefetch --md5sum genomes/ --md5sum-auto-fix custom_failed_files.txt
 ```
 
-**生成的文件**：
-- `md5_failed_files.txt` - 失败文件的详细信息列表（默认在当前运行目录）
-- `md5_verification_report.txt` - 完整的MD5校验报告（在校验目录）
-- `redownload_report.txt` - 详细的修复报告（在校验目录，仅auto-fix时生成）
+Failed-file list format:
 
-**失败文件列表格式**：
-```
-# MD5 Verification Failed Files
-# Generated: 2024-03-05 10:30:00
-# Total failed files: 5
-#
-# Format: STATUS | FILE_PATH | EXPECTED_HASH | COMPUTED_HASH | ERROR_MESSAGE
-#================================================================================
-
-FAIL | Bacteria/Escherichia_coli/GCF_000005845.2/genome.fna | abc123... | def456... | 
+```text
+STATUS | FILE_PATH | EXPECTED_HASH | COMPUTED_HASH | ERROR_MESSAGE
+FAIL | Bacteria/Escherichia_coli/GCF_000005845.2/genome.fna | abc123... | def456... |
 MISSING | Bacteria/Salmonella/GCF_000006945.2/protein.faa | xyz789... | N/A | File not found
 ERROR | Archaea/Methanococcus/GCF_000007845.1/genome.fna | 123abc... | N/A | Permission denied
 ```
 
-**修复报告示例**：
-```
-MD5 Auto-Fix Report
-===================
-Total failed files: 5
-Successfully fixed: 4
-Still failed: 1
-Skipped: 0
-Processing time: 120.5 seconds
+## Input File Formats
 
-Successfully Fixed Files:
-- GCA_000302455.1.fna
-- GCA_000302456.1.fna
-- GCA_000302457.1.fna
-- GCA_000302458.1.fna
+### Taxon input
 
-Still Failed Files:
-- GCA_000302459.1.fna (MD5 mismatch after redownload)
-```
+Taxon mode supports TaxIDs:
 
-### Accession 模式断点续传
-
-**自动断点续传**：
-```bash
-# 开始下载
-ncbi-genomefetch -a accessions.txt -o genomes/
-
-# 如果中断（Ctrl+C 或 SIGTERM），直接重新运行相同命令
-ncbi-genomefetch -a accessions.txt -o genomes/
-# 工具会自动：
-# 1. 检测 .accession_progress_state.json
-# 2. 跳过已完成的 accessions
-# 3. 继续下载剩余的 accessions
-```
-
-**进度状态文件**：
-- 位置：`{output_dir}/.accession_progress_state.json`
-- 内容：已完成的 accessions 列表
-- 自动管理：完成后自动删除
-
-**查看进度**：
-```bash
-# 查看状态文件
-cat genomes/.accession_progress_state.json
-
-# 示例输出
-{
-  "completed_taxa": ["GCF_000005845.2", "GCF_000009045.1"],
-  "last_update": "2026-01-21T10:30:00"
-}
-```
-
-**中断处理**：
-- ✅ 支持 Ctrl+C (SIGINT)
-- ✅ 支持 SIGTERM（容器环境）
-- ✅ 线程安全的中断处理
-- ✅ 优雅关闭，不丢失进度
-
-### Taxon 模式断点续传
-
-Taxon 模式也支持断点续传，状态文件为 `.progress_state.json`。
-
-```bash
-# 中断后恢复
-ncbi-genomefetch -i taxa.txt -o genomes/
-
-# 仅根据 .progress_state.json 续传，不验证输出目录中的文件
-ncbi-genomefetch -i taxa.txt -o genomes/ --no-validate-resume-files
-```
-
-## 输入文件格式
-
-### Taxon 模式输入文件
-
-支持三种格式：
-
-**格式 1：仅 TaxID（推荐）**
-```
+```text
 562
 1423
 ```
 
-**格式 2：名称 + TaxID（制表符分隔）**
-```
-Escherichia coli	562
-Bacillus subtilis	1423
+It also supports name and TaxID pairs separated by a tab:
+
+```text
+Escherichia coli    562
+Bacillus subtilis   1423
 ```
 
-**格式 3：分割模式输出（包含子节点）**
-```
+Split-mode output files can also be used as taxon-mode input:
+
+```text
 # Species: Escherichia coli (562)
-Escherichia coli	562
-Escherichia coli K-12	83333
-Escherichia coli O157:H7	83334
+Escherichia coli    562
+Escherichia coli K-12   83333
+Escherichia coli O157:H7    83334
 ```
 
-**注释和空行**：
-- 以 `#` 开头的行为注释，会被忽略
-- 空行会被忽略
-- 支持混合格式
+Lines beginning with `#` and blank lines are ignored.
 
-### Accession 模式输入文件
+### Accession input
 
-每行一个 accession 号：
-```
+Accession mode expects one accession per line:
+
+```text
 GCF_000005845.2
 GCF_000009045.1
 GCA_000001405.29
 ```
 
-**注意**：
-- 自动去重
-- 保留原始顺序
-- 支持版本号（如 `.2`）
+Duplicate accessions are removed while preserving input order.
 
-## 输出结构
+## Output Layout
 
-### Taxon 模式输出
+### Taxon mode
 
-```
+```text
 genomes/
-├── Escherichia_coli_562/
-│   ├── GCF_000005845.2.fna          # 基因组序列
-│   ├── GCF_000005845.2.faa          # 蛋白质序列（如果 --include protein）
-│   ├── GCF_000005845.2.gff          # 注释文件（如果 --include gff3）
-│   └── ...
-├── Bacillus_subtilis_1423/
-│   └── ...
-├── md5sum.txt                        # MD5 校验和
-├── taxonomy_summary.tsv              # 分类学摘要
-├── taxonomy_report.jsonl             # 详细分类学报告
-└── .progress_state.json              # 进度状态（未完成时）
+|-- Escherichia_coli_562/
+|   |-- GCF_000005845.2.fna
+|   |-- GCF_000005845.2.faa
+|   |-- GCF_000005845.2.gff
+|   `-- ...
+|-- Bacillus_subtilis_1423/
+|   `-- ...
+|-- md5sum.txt
+|-- taxonomy_summary.tsv
+|-- taxonomy_report.jsonl
+`-- .progress_state.json
 ```
 
-### Accession 模式输出
+### Accession mode
 
-```
+```text
 genomes/
-├── GCF_000005845.2.fna               # 标准化文件名
-├── GCF_000009045.1.fna
-├── GCA_000001405.29.fna
-├── md5sum.txt                        # 合并的 MD5 文件
-└── .accession_progress_state.json    # 进度状态（未完成时）
+|-- GCF_000005845.2.fna
+|-- GCF_000009045.1.fna
+|-- GCA_000001405.29.fna
+|-- md5sum.txt
+`-- .accession_progress_state.json
 ```
 
-**文件名标准化**：
-- 格式：`{accession}.{extension}`
-- 示例：`GCF_000005845.2.fna`
-- 扩展名：`.fna` (genome), `.faa` (protein), `.gff` (gff3), `.cds.fna` (cds)
+Accession output files use the standardized format:
 
-### MD5 校验和文件
-
-```
-# MD5 checksums
-a1b2c3d4e5f6...  GCF_000005845.2.fna
-b2c3d4e5f6a7...  GCF_000009045.1.fna
+```text
+{accession}.{extension}
 ```
 
-## 性能优化
+Common extensions include:
 
-### 1. 使用 API 密钥
+- `.fna` for genome
+- `.faa` for protein
+- `.gff` for GFF3
+- `.cds.fna` for CDS
+- `.gbff` for GenBank files
 
-获取 NCBI API 密钥可提高速率限制 10 倍：
+## Performance
+
+Use an NCBI API key for higher rate limits:
 
 ```bash
-# 注册获取 API 密钥：https://www.ncbi.nlm.nih.gov/account/
-
-# 使用 API 密钥
 ncbi-genomefetch -i taxa.txt -o genomes/ -k YOUR_API_KEY
 ```
 
-### 2. 调整并行参数
+Suggested starting points:
+
+| Scenario | Suggested settings |
+| --- | --- |
+| Small download, fewer than 10 entries | `-w 2 -b 50` |
+| Medium download, 10 to 100 entries | `-w 4 -b 100 -k API_KEY` |
+| Large download, more than 100 entries | `-w 8 -b 150 -k API_KEY` |
+| Very large download, more than 1000 entries | Use split mode and run groups separately |
+
+## Troubleshooting
+
+### `datasets` command not found
+
+Add the Datasets CLI to `PATH` or pass its full path:
 
 ```bash
-# 增加线程数（推荐 4-8）
-ncbi-genomefetch -a accessions.txt -o genomes/ -w 8
-
-# 增加批次大小（Accession 模式，推荐 100-200）
-ncbi-genomefetch -a accessions.txt -o genomes/ -b 150 -w 8
-```
-
-### 3. 磁盘空间管理
-
-```bash
-# 设置磁盘空间阈值
-ncbi-genomefetch -i taxa.txt -o genomes/ --disk-warning-bytes 20GB
-
-# 禁用磁盘空间检查（不推荐）
-ncbi-genomefetch -i taxa.txt -o genomes/ --disable-disk-backoff
-```
-
-### 4. 性能建议
-
-| 场景 | 推荐配置 |
-|------|----------|
-| 小型下载（< 10 个） | `-w 2 -b 50` |
-| 中型下载（10-100 个） | `-w 4 -b 100 -k API_KEY` |
-| 大型下载（> 100 个） | `-w 8 -b 150 -k API_KEY` |
-| 超大型下载（> 1000 个） | 使用分割模式 + 分布式下载 |
-
-## 故障排除
-
-### 1. datasets 工具未找到
-
-**错误**：`datasets: command not found`
-
-**解决方案**：
-```bash
-# 方案 1：添加到 PATH
-export PATH=$PATH:/path/to/datasets
-
-# 方案 2：指定完整路径
 ncbi-genomefetch -i taxa.txt -o genomes/ --datasets-exe /path/to/datasets
 ```
 
-### 2. 下载速度慢
+On Windows:
 
-**原因**：未使用 API 密钥，受速率限制
+```powershell
+ncbi-genomefetch -i taxa.txt -o genomes/ --datasets-exe C:\path\to\datasets.exe
+```
 
-**解决方案**：
+### Downloads are slow
+
+Use an NCBI API key and tune worker count:
+
 ```bash
-# 获取并使用 API 密钥
 ncbi-genomefetch -i taxa.txt -o genomes/ -k YOUR_API_KEY -w 8
 ```
 
-### 3. 磁盘空间不足
+### Disk space is low
 
-**错误**：`Insufficient disk space`
+Use a different output directory, clean disk space, or adjust backoff thresholds:
 
-**解决方案**：
 ```bash
-# 清理磁盘空间或使用其他目录
 ncbi-genomefetch -i taxa.txt -o /other/path/genomes/
-
-# 或降低最低保留空间阈值
 ncbi-genomefetch -i taxa.txt -o genomes/ --disk-minimum-bytes 5GB
 ```
 
-### 4. 下载中断
+### A download was interrupted
 
-**Accession 模式**：
+Rerun the same command. Progress state files are used to skip completed work.
+
 ```bash
-# 直接重新运行相同命令，自动恢复
 ncbi-genomefetch -a accessions.txt -o genomes/
-```
-
-**Taxon 模式**：
-```bash
-# 直接重新运行相同命令，自动恢复
 ncbi-genomefetch -i taxa.txt -o genomes/
 ```
 
-### 5. 进度未保存
+### Files were manually downloaded
 
-**检查**：
+If you manually downloaded and rehydrated missing data, verify the file names,
+directory structure, and `md5sum.txt` entries before merging the files into an
+NCBI-GenomeFetch output directory. Rerunning the original command is preferred
+because the tool can use its progress state and validation logic.
+
+## Development
+
+Run the smoke tests:
+
 ```bash
-# 确保输出目录可写
-ls -la genomes/
-
-# 检查状态文件
-cat genomes/.accession_progress_state.json
+python -m unittest discover -s tests
 ```
 
-**解决方案**：
-- 确保输出目录有写权限
-- 确保磁盘空间充足
-- 更新到最新版本
+Compile the package:
 
-### 6. 文件名不匹配
-
-**问题**：期望旧格式文件名（如 `GCF_000005845.2_genomic.fna`）
-
-**说明**：当前版本使用标准化文件名格式 `{accession}.{extension}`
-
-**示例**：
-- 旧格式：`GCF_000005845.2_genomic.fna`
-- 新格式：`GCF_000005845.2.fna`
-
-### 7. 手动补充失败的物种
-
-**场景**：程序运行时部分物种下载失败，你已手动下载并补水这些物种
-
-**解决方案**：使用手动组织工具将文件补充到输出目录
-
-**单个物种**：
 ```bash
-# 1. 手动下载并补水
-datasets download genome taxon "Escherichia coli" --filename temp/ecoli.zip --dehydrated
-unzip temp/ecoli.zip -d temp/ecoli_extracted
-datasets rehydrate --directory temp/ecoli_extracted
-
-# 2. 使用同一输入文件重新运行工具，或按输出命名规则手动放入对应目录
-ncbi-genomefetch -i taxa.txt -o output/
+python -m compileall -q taxonomy_downloader tests
 ```
 
-**批量处理多个物种**：
-```bash
-# 1. 创建配置文件 (species_to_organize.txt)
-# 格式: 临时目录<TAB>物种名称
-temp/ecoli_extracted	Escherichia coli
-temp/salmonella_extracted	Salmonella enterica
+Build source and wheel distributions:
 
-# 2. 使用同一批输入重新运行，已完成任务会按进度状态跳过
-ncbi-genomefetch -i taxa.txt -o output/
+```bash
+pyproject-build --no-isolation
 ```
 
-**说明**：如果需要直接合并手工下载的数据，请先核对文件命名、目录结构和 `md5sum.txt`。
+## License
 
-## 版本历史
+This project is released under the MIT License. See [LICENSE](LICENSE).
 
-### v1.0.0 (2026-03-11)
-- ✅ MD5自动修复：验证失败后自动重新下载并修复文件
-- ✅ 智能路径匹配：使用md5sum目录上下文，避免同名文件冲突
-- ✅ ZIP文件自动解压：处理NCBI下载的压缩包
-- ✅ 增加发布烟测：导入、CLI help 和源码编译检查
-- ✅ Accession 模式断点续传
-- ✅ 增强中断处理（SIGTERM/SIGINT）
-- ✅ 菌株级基因组自动识别
-- ✅ 多文件类型支持（protein, gff3, cds 等）
-- ✅ 文件名标准化
-- ✅ 磁盘空间动态回退
+## Support
 
-## 许可证
+- Documentation: [README.md](README.md)
+- Quick start: [QUICKSTART.md](QUICKSTART.md)
+- Issues: [GitHub Issues](https://github.com/zhuoyi780-alt/NCBI-GenomeFetch/issues)
 
-MIT License
+## Acknowledgements
 
-## 支持
-
-- 文档：[README.md](README.md)
-- 快速开始：[QUICKSTART.md](QUICKSTART.md)
-- 问题反馈：[GitHub Issues](https://github.com/zhuoyi780-alt/NCBI-GenomeFetch/issues)
-
-## 致谢
-
-感谢 NCBI 提供 datasets 工具和 API 服务。
+NCBI-GenomeFetch depends on the NCBI Datasets CLI and NCBI data services.
