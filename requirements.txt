@@ -1,2 +1,1 @@
-# This project has no required third-party Python runtime dependencies.
-# Download features depend on the external NCBI Datasets CLI tool.
+requests>=2.28.0

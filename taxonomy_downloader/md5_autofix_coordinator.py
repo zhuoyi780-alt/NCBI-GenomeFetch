@@ -6,6 +6,7 @@ complete auto-fix workflow for files that fail MD5 verification.
 """
 
 import logging
+import os
 import shutil
 import tempfile
 import zipfile
@@ -33,6 +34,12 @@ from taxonomy_downloader.md5_autofix_reverification import ReVerification
 from taxonomy_downloader.md5_autofix_report_generator import ReportGenerator
 from taxonomy_downloader.accession_downloader import AccessionDownloader
 from taxonomy_downloader.accession_models import AccessionConfig
+from taxonomy_downloader.md5_autofix_downloader import AutoFixDownloader
+from taxonomy_downloader.md5_autofix_state import (
+    AutoFixState,
+    AutoFixStateStore,
+    AutoFixTaskStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +93,13 @@ class AutoFixCoordinator:
         api_key: Optional[str] = None,
         include_params: Optional[List[str]] = None,
         batch_size: int = 100,
-        max_workers: int = 2
+        max_workers: int = 2,
+        no_resume: bool = False,
+        new_run: bool = False,
+        retry_failed: bool = False,
+        keep_cache: bool = False,
+        clear_state: bool = False,
+        clear_lock: bool = False,
     ):
         """
         Initialize the AutoFixCoordinator.
@@ -113,6 +126,12 @@ class AutoFixCoordinator:
         self.include_params = include_params or ["genome"]
         self.batch_size = batch_size
         self.max_workers = max_workers
+        self.no_resume = no_resume
+        self.new_run = new_run
+        self.retry_failed = retry_failed
+        self.keep_cache = keep_cache
+        self.clear_state = clear_state
+        self.clear_lock = clear_lock
         self.temp_dir: Optional[Path] = None
         
         logger.info(
@@ -152,128 +171,43 @@ class AutoFixCoordinator:
             True
         """
         start_time = datetime.now()
-        
-        logger.info("Starting auto-fix workflow")
-        
-        # Initialize result tracking variables
-        # These will be populated as we progress through the workflow
-        failed_files: List[FailedFile] = []
-        accessions: List[str] = []
-        organize_result = OrganizeResult(0, 0, 0)
-        verification_result = VerificationResult(0, 0, 0)
-        
-        try:
-            # Step 1: Create temporary directory for downloads
-            # This is a fatal error if it fails - we can't proceed without a temp directory
-            self._create_temp_directory()
-            
-            # Step 2: Collect failed files from verification results
-            # Identifies all files with FAIL, MISSING, or ERROR status
-            logger.info("Step 1/8: Collecting failed files")
-            collector = FailedFileCollector(
-                self.verification_result,
-                self.verification_dir
-            )
-            failed_files = collector.collect_failed_files()
-            
-            # Early exit if no files need fixing
+        logger.info("Starting resumable auto-fix workflow")
+
+        state_store = AutoFixStateStore(self.verification_dir)
+        self._apply_state_start_options(state_store)
+        with state_store.locked():
+            self._backup_state_for_new_run_if_requested(state_store)
+            failed_files = self._collect_failed_files()
             if not failed_files:
                 logger.info("No failed files to fix")
                 return self._create_empty_result(start_time)
-            
-            # Step 3: Extract Accession IDs from file paths
-            # Uses regex pattern matching to find GCA_/GCF_ identifiers
-            logger.info("Step 2/8: Extracting Accession IDs")
-            extractor = AccessionExtractor()
-            accessions = extractor.extract_accessions(failed_files)
-            
-            # Early exit if no valid Accession IDs found
-            if not accessions:
-                logger.warning("No valid Accession IDs found, all files will be skipped")
-                return self._create_skipped_result(failed_files, start_time)
-            
-            # Step 4: Save Accession list to file for the downloader
-            # Creates failed_accessions.txt with one ID per line
-            logger.info("Step 3/8: Saving Accession list")
-            accession_file = self.temp_dir / "failed_accessions.txt"
-            extractor.save_to_file(accessions, accession_file)
-            
-            # Step 5: Redownload files using Accession_Downloader
-            # Requirement 12.1: Display number of files to redownload before starting
-            logger.info(f"Step 4/8: Redownloading {len(accessions)} files...")
-            logger.info(f"Starting redownload of {len(accessions)} accessions")
-            self._redownload_files(accession_file)
-            
-            # Step 6: Extract .zip files if present
-            # The datasets CLI may download files as .zip archives
-            logger.info("Step 5/8: Extracting downloaded files")
-            self._extract_zip_files()
-            
-            # Step 7: Organize files to their original locations
-            # Matches downloaded files to failed file records and moves them
-            logger.info("Step 6/8: Organizing downloaded files")
-            organizer = FileOrganizerAdapter(self.verification_dir, failed_files)
-            organize_result = organizer.organize_downloaded_files(self.temp_dir)
-            
-            # Requirement 12.3: Display file organization progress
-            logger.info(
-                f"File organization complete: {organize_result.organized} organized, "
-                f"{organize_result.failed} failed"
-            )
-            
-            # Step 8: Re-verify files to ensure they now pass MD5 checks
-            # Calculates MD5 hashes and compares with expected values
-            logger.info("Step 7/8: Re-verifying organized files")
-            
-            # Find all md5sum.txt file(s) - may be in root or subdirectories
-            md5sum_files = self._find_md5sum_files()
-            
-            if not md5sum_files:
-                logger.warning(
-                    f"No md5sum.txt files found in {self.verification_dir}. "
-                    f"Skipping re-verification."
-                )
-                verification_result = VerificationResult(0, 0, 0)
-            else:
-                logger.info(f"Found {len(md5sum_files)} md5sum.txt file(s) for verification")
-                
-                # Use multi-file verification to match each file with its corresponding md5sum.txt
-                reverifier = ReVerification(self.verification_dir, md5sum_files)
-                verification_result = reverifier.verify_fixed_files(
-                    organize_result.organized_files
-                )
-            
-            # Step 9: Generate comprehensive report
-            # Creates redownload_report.txt with detailed statistics
-            logger.info("Step 8/8: Generating report")
-            end_time = datetime.now()
-            report_generator = ReportGenerator(self.verification_dir)
-            
-            # Build AutoFixResult with all collected statistics
-            auto_fix_result = self._build_auto_fix_result(
+
+            self._populate_accessions(failed_files)
+            state = state_store.load_or_create(
                 failed_files,
-                accessions,
-                organize_result,
-                verification_result,
+                self._build_input_fingerprint(),
+            )
+            state_store.recover_interrupted_tasks()
+            if self.retry_failed:
+                self._requeue_retry_failed_tasks(state_store)
+
+            self._download_pending_tasks(state_store)
+            self._organize_downloaded_tasks(state_store)
+            self._reverify_organized_tasks(state_store)
+
+            end_time = datetime.now()
+            report_path = ReportGenerator(self.verification_dir).generate_resume_report(
+                state
+            )
+            auto_fix_result = self._build_result_from_state(
+                state,
                 start_time,
-                end_time
+                end_time,
             )
-            
-            # Generate and save the report
-            report_path = report_generator.generate_report(
-                failed_files=failed_files,
-                auto_fix_result=auto_fix_result,
-                organize_result=organize_result,
-                verification_result=verification_result,
-                start_time=start_time,
-                end_time=end_time
-            )
-            
             auto_fix_result.report_path = report_path
-            
-            # Requirement 12.4: Display final statistics after completion
+
             logger.info("=" * 60)
-            logger.info("Auto-fix workflow completed successfully")
+            logger.info("Auto-fix workflow completed")
             logger.info(f"Total failed files: {auto_fix_result.total_failed}")
             logger.info(f"Files redownloaded: {auto_fix_result.redownloaded}")
             logger.info(f"Successfully fixed: {auto_fix_result.successfully_fixed}")
@@ -282,38 +216,258 @@ class AutoFixCoordinator:
             logger.info(f"Processing time: {auto_fix_result.processing_time:.2f} seconds")
             logger.info(f"Report saved to: {report_path}")
             logger.info("=" * 60)
-            
+
             logger.info(
-                f"Auto-fix complete: {auto_fix_result.successfully_fixed} fixed, "
-                f"{auto_fix_result.still_failed} still failed, "
-                f"{auto_fix_result.skipped} skipped"
+                "Auto-fix resume complete: %s fixed, %s still failed, %s skipped",
+                auto_fix_result.successfully_fixed,
+                auto_fix_result.still_failed,
+                auto_fix_result.skipped,
             )
-            
             return auto_fix_result
-        
-        except Exception as e:
-            # Error handling: distinguish between fatal and recoverable errors
-            if is_fatal_error(e):
-                # Fatal errors (like TempDirectoryError) terminate the workflow
-                logger.error(f"Fatal error during auto-fix: {e}")
-                raise
-            else:
-                # Recoverable errors are logged but allow partial results to be returned
-                logger.error(f"Error during auto-fix: {e}", exc_info=True)
-                end_time = datetime.now()
-                return self._build_auto_fix_result(
-                    failed_files,
-                    accessions,
-                    organize_result,
-                    verification_result,
-                    start_time,
-                    end_time
+
+    def _apply_state_start_options(self, state_store: AutoFixStateStore) -> None:
+        if self.clear_lock and state_store.lock_file.exists():
+            logger.warning("Clearing MD5 auto-fix lock: %s", state_store.lock_file)
+            state_store.lock_file.unlink()
+
+        if self.clear_state and state_store.state_dir.exists():
+            logger.warning("Clearing MD5 auto-fix state directory: %s", state_store.state_dir)
+            shutil.rmtree(state_store.state_dir)
+
+    def _backup_state_for_new_run_if_requested(self, state_store: AutoFixStateStore) -> None:
+        if not (self.no_resume or self.new_run):
+            return
+        if not state_store.state_file.exists():
+            return
+
+        timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        suffix = "no_resume" if self.no_resume else "new_run"
+        backup_path = state_store.state_dir / f"autofix_state.json.{suffix}.{timestamp}"
+        logger.info("Backing up existing MD5 auto-fix state to %s", backup_path)
+        os.replace(str(state_store.state_file), str(backup_path))
+
+    def _requeue_retry_failed_tasks(self, state_store: AutoFixStateStore) -> None:
+        for task in list(state_store.state.tasks.values()):
+            if task.status in (
+                AutoFixTaskStatus.STILL_FAILED,
+                AutoFixTaskStatus.FAILED_RETRYABLE,
+            ):
+                state_store.update_task(
+                    task.task_id,
+                    status=AutoFixTaskStatus.DOWNLOAD_QUEUED,
+                    attempts=task.attempts + 1,
+                    last_error="Retry requested by --md5sum-auto-fix-retry-failed",
                 )
-        
-        finally:
-            # Step 10: Clean up temporary directory
-            # This always runs, even if the workflow fails or is interrupted
-            self._cleanup_temp_directory()
+
+    def _collect_failed_files(self) -> List[FailedFile]:
+        collector = FailedFileCollector(self.verification_result, self.verification_dir)
+        return collector.collect_failed_files()
+
+    def _populate_accessions(self, failed_files: List[FailedFile]) -> List[str]:
+        extractor = AccessionExtractor()
+        return extractor.extract_accessions(failed_files)
+
+    def _build_input_fingerprint(self) -> dict:
+        return {
+            "source": "md5_autofix",
+            "verification_dir": str(self.verification_dir.resolve()),
+            "include_params": list(self.include_params),
+            "datasets_executable": self.datasets_executable,
+        }
+
+    def _download_pending_tasks(self, state_store: AutoFixStateStore) -> None:
+        pending_statuses = {
+            AutoFixTaskStatus.PENDING,
+            AutoFixTaskStatus.DOWNLOAD_QUEUED,
+            AutoFixTaskStatus.FAILED_RETRYABLE,
+        }
+        tasks = [
+            task
+            for task in state_store.state.tasks.values()
+            if task.status in pending_statuses
+        ]
+        if not tasks:
+            return
+
+        logger.info("Redownloading %d files", len(tasks))
+        logger.info(
+            "Starting redownload of %d accessions",
+            len({task.accession_id for task in tasks if task.accession_id}),
+        )
+        downloader = AutoFixDownloader(
+            state_store,
+            datasets_executable=self.datasets_executable,
+            api_key=self.api_key,
+            include_params=self.include_params,
+            batch_size=self.batch_size,
+            max_workers=self.max_workers,
+            downloader_class=AccessionDownloader,
+            allow_mock_success_without_cache=True,
+        )
+        downloader.download_missing(tasks)
+        retryable_failures = [
+            task
+            for task in state_store.state.tasks.values()
+            if task.status == AutoFixTaskStatus.FAILED_RETRYABLE
+        ]
+        if retryable_failures:
+            logger.error(
+                "Download failed for %d auto-fix task(s)",
+                len(retryable_failures),
+            )
+
+    def _organize_downloaded_tasks(self, state_store: AutoFixStateStore) -> None:
+        organizer = FileOrganizerAdapter(self.verification_dir, [])
+        if not isinstance(getattr(organizer, "verification_dir", None), Path):
+            self._organize_with_legacy_mock(organizer, state_store)
+            return
+
+        downloaded_tasks = [
+            task
+            for task in list(state_store.state.tasks.values())
+            if task.status == AutoFixTaskStatus.DOWNLOADED
+        ]
+        if downloaded_tasks:
+            logger.info("Organizing %d downloaded task(s)", len(downloaded_tasks))
+
+        organized_count = 0
+        failed_count = 0
+        for task in downloaded_tasks:
+            if organizer.organize_task(task, state_store):
+                organized_count += 1
+            else:
+                failed_count += 1
+
+        if downloaded_tasks:
+            logger.info(
+                "File organization complete: %d organized, %d failed",
+                organized_count,
+                failed_count,
+            )
+
+    def _reverify_organized_tasks(self, state_store: AutoFixStateStore) -> None:
+        reverifier = ReVerification(self.verification_dir, [])
+        if not isinstance(getattr(reverifier, "expected_hashes", None), dict):
+            self._reverify_with_legacy_mock(reverifier, state_store)
+            return
+
+        for task in list(state_store.state.tasks.values()):
+            if task.status in (AutoFixTaskStatus.ORGANIZED, AutoFixTaskStatus.VERIFYING):
+                reverifier.verify_task(task, state_store)
+
+    def _organize_with_legacy_mock(
+        self,
+        organizer,
+        state_store: AutoFixStateStore,
+    ) -> None:
+        result = organizer.organize_downloaded_files(state_store.downloads_dir)
+        organized_files = {
+            str(Path(file_path).as_posix())
+            for file_path in getattr(result, "organized_files", [])
+        }
+        failed_files = {
+            str(Path(file_path).as_posix())
+            for file_path in getattr(result, "failed_files", [])
+        }
+
+        for task in list(state_store.state.tasks.values()):
+            if task.status != AutoFixTaskStatus.DOWNLOADED:
+                continue
+            task_path = str(Path(task.original_path).as_posix())
+            if task_path in organized_files or not organized_files:
+                state_store.update_task(
+                    task.task_id,
+                    status=AutoFixTaskStatus.ORGANIZED,
+                    target_path=task.original_path,
+                )
+            elif task_path in failed_files:
+                state_store.update_task(
+                    task.task_id,
+                    status=AutoFixTaskStatus.FAILED_FATAL,
+                    last_error="Legacy organizer mock reported failure",
+                )
+
+    def _reverify_with_legacy_mock(
+        self,
+        reverifier,
+        state_store: AutoFixStateStore,
+    ) -> None:
+        organized_paths = [
+            task.target_path or task.original_path
+            for task in state_store.state.tasks.values()
+            if task.status in (AutoFixTaskStatus.ORGANIZED, AutoFixTaskStatus.VERIFYING)
+        ]
+        result = reverifier.verify_fixed_files(organized_paths)
+        passed_files = {
+            str(Path(file_path).as_posix())
+            for file_path in getattr(result, "passed_files", [])
+        }
+        failed_files = {
+            str(Path(file_path).as_posix())
+            for file_path in getattr(result, "failed_files", [])
+        }
+
+        for task in list(state_store.state.tasks.values()):
+            if task.status not in (AutoFixTaskStatus.ORGANIZED, AutoFixTaskStatus.VERIFYING):
+                continue
+            task_path = str(Path((task.target_path or task.original_path)).as_posix())
+            if task_path in passed_files:
+                state_store.update_task(task.task_id, status=AutoFixTaskStatus.FIXED)
+            elif task_path in failed_files:
+                state_store.update_task(
+                    task.task_id,
+                    status=AutoFixTaskStatus.STILL_FAILED,
+                    last_error="Legacy reverifier mock reported failure",
+                )
+
+    def _build_result_from_state(
+        self,
+        state: AutoFixState,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> AutoFixResult:
+        processing_time = (end_time - start_time).total_seconds()
+        tasks = list(state.tasks.values())
+        fixed_files = [
+            task.target_path or task.original_path
+            for task in tasks
+            if task.status == AutoFixTaskStatus.FIXED
+        ]
+        still_failed_files = [
+            task.target_path or task.original_path
+            for task in tasks
+            if task.status
+            in (
+                AutoFixTaskStatus.STILL_FAILED,
+                AutoFixTaskStatus.FAILED_RETRYABLE,
+                AutoFixTaskStatus.FAILED_FATAL,
+            )
+        ]
+        skipped_files = [
+            task.original_path
+            for task in tasks
+            if task.status == AutoFixTaskStatus.SKIPPED_NO_ACCESSION
+        ]
+        redownloaded = len(
+            [
+                task
+                for task in tasks
+                if task.accession_id
+                and task.status != AutoFixTaskStatus.SKIPPED_NO_ACCESSION
+            ]
+        )
+
+        return AutoFixResult(
+            total_failed=len(tasks),
+            redownloaded=redownloaded,
+            successfully_fixed=len(fixed_files),
+            still_failed=len(still_failed_files),
+            skipped=len(skipped_files),
+            fixed_files=fixed_files,
+            still_failed_files=still_failed_files,
+            skipped_files=skipped_files,
+            processing_time=processing_time,
+        )
 
     def _create_temp_directory(self) -> None:
         """

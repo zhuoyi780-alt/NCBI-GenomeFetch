@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from taxonomy_downloader.md5_autofix_models import VerificationResult
+from taxonomy_downloader.md5_autofix_state import (
+    AutoFixStateStore,
+    AutoFixTask,
+    AutoFixTaskStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +58,11 @@ class ReVerification:
             md5sum_files = [md5sum_files]
         
         self.md5sum_files = [Path(f) for f in md5sum_files]
+        self.md5sum_file = self.md5sum_files[0] if self.md5sum_files else None
         
         # Validate that at least one file exists
         valid_files = [f for f in self.md5sum_files if f.exists()]
-        if not valid_files:
+        if self.md5sum_files and not valid_files:
             raise FileNotFoundError(
                 f"No valid md5sum.txt files found. Checked: {self.md5sum_files}"
             )
@@ -131,6 +137,81 @@ class ReVerification:
         )
         
         return result
+
+    def verify_task(
+        self,
+        task: AutoFixTask,
+        state_store: Optional[AutoFixStateStore] = None,
+    ) -> bool:
+        """Verify one auto-fix task using its expected hash from persistent state."""
+        self._update_task(
+            task,
+            state_store,
+            status=AutoFixTaskStatus.VERIFYING,
+            last_error=None,
+        )
+
+        if state_store and state_store.state:
+            task = state_store.state.tasks[task.task_id]
+
+        target_path = self._task_target_path(task)
+        if not target_path.exists() or not target_path.is_file():
+            message = f"Target file not found for verification: {target_path}"
+            logger.error(message)
+            self._update_task(
+                task,
+                state_store,
+                status=AutoFixTaskStatus.STILL_FAILED,
+                last_error=message,
+            )
+            return False
+
+        calculated_hash = self._calculate_md5(target_path)
+        if calculated_hash == task.expected_hash:
+            self._update_task(
+                task,
+                state_store,
+                status=AutoFixTaskStatus.FIXED,
+                computed_hash=calculated_hash,
+                last_error=None,
+            )
+            logger.info("Verification passed for auto-fix task %s", task.task_id)
+            return True
+
+        message = (
+            f"MD5 mismatch for {task.target_path or task.original_path}: "
+            f"expected {task.expected_hash}, got {calculated_hash}"
+        )
+        logger.error(message)
+        self._update_task(
+            task,
+            state_store,
+            status=AutoFixTaskStatus.STILL_FAILED,
+            computed_hash=calculated_hash,
+            last_error=message,
+        )
+        return False
+
+    def _task_target_path(self, task: AutoFixTask) -> Path:
+        target_path = Path(task.target_path or task.original_path)
+        if target_path.is_absolute():
+            return target_path
+        return self.verification_dir / target_path
+
+    def _update_task(
+        self,
+        task: AutoFixTask,
+        state_store: Optional[AutoFixStateStore],
+        **changes,
+    ) -> None:
+        if state_store is not None:
+            state_store.update_task(task.task_id, **changes)
+            return
+
+        for key, value in changes.items():
+            if key == "status" and not isinstance(value, AutoFixTaskStatus):
+                value = AutoFixTaskStatus(value)
+            setattr(task, key, value)
     
     def _calculate_md5(self, file_path: Path) -> str:
         """Calculate MD5 hash of a file.

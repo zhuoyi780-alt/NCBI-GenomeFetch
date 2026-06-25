@@ -10,7 +10,7 @@ from taxonomy_downloader.models import DownloadConfig
 
 class SmokeTests(unittest.TestCase):
     def test_package_version_is_exposed(self):
-        self.assertEqual(taxonomy_downloader.__version__, "1.0.0")
+        self.assertEqual(taxonomy_downloader.__version__, "1.0.1")
 
     def test_cli_help_runs(self):
         result = subprocess.run(

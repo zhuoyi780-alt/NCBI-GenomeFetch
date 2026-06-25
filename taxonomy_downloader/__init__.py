@@ -14,7 +14,7 @@ Features:
 - Task splitting for large taxonomy downloads
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __author__ = "NCBI-GenomeFetch Team"
 __email__ = ""
 __license__ = "MIT"

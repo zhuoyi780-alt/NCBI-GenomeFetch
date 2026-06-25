@@ -12,7 +12,7 @@ from typing import Optional
 try:
     from . import __version__
 except ImportError:
-    __version__ = "1.1.3"  # Fallback version
+    __version__ = "1.0.1"  # Fallback version
 
 
 class ConsoleOutputManager:

@@ -573,11 +573,11 @@ class AccessionDownloader:
                 # Only log warning if not in silent mode
                 if not silent:
                     self.logger.warning(
-                        f"Output file missing for completed accession '{accession}', will re-process"
+                        f"Output file missing or untrusted for completed accession '{accession}', will re-process"
                     )
                 else:
                     self.logger.debug(
-                        f"File not found for accession '{accession}' (expected for first-time download)"
+                        f"File not found or untrusted for accession '{accession}' (expected for first-time download)"
                     )
             
             # Performance: Log progress every 10,000 files for very large lists

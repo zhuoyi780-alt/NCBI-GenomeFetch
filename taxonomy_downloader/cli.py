@@ -563,7 +563,13 @@ class TaxonomyDownloader:
                     api_key=self.config.api_key,
                     include_params=self.config.include_params,
                     batch_size=getattr(self.config, '_batch_size', 100),
-                    max_workers=self.config.max_workers
+                    max_workers=self.config.max_workers,
+                    no_resume=getattr(self.config, '_md5_auto_fix_no_resume', False),
+                    new_run=getattr(self.config, '_md5_auto_fix_new_run', False),
+                    retry_failed=getattr(self.config, '_md5_auto_fix_retry_failed', False),
+                    keep_cache=getattr(self.config, '_md5_auto_fix_keep_cache', False),
+                    clear_state=getattr(self.config, '_md5_auto_fix_clear_state', False),
+                    clear_lock=getattr(self.config, '_md5_auto_fix_clear_lock', False)
                 )
                 
                 # Execute auto-fix
@@ -722,7 +728,13 @@ class TaxonomyDownloader:
                 api_key=self.config.api_key,
                 include_params=self.config.include_params,
                 batch_size=getattr(self.config, '_batch_size', 100),
-                max_workers=self.config.max_workers
+                max_workers=self.config.max_workers,
+                no_resume=getattr(self.config, '_md5_auto_fix_no_resume', False),
+                new_run=getattr(self.config, '_md5_auto_fix_new_run', False),
+                retry_failed=getattr(self.config, '_md5_auto_fix_retry_failed', False),
+                keep_cache=getattr(self.config, '_md5_auto_fix_keep_cache', False),
+                clear_state=getattr(self.config, '_md5_auto_fix_clear_state', False),
+                clear_lock=getattr(self.config, '_md5_auto_fix_clear_lock', False)
             )
             
             # Execute auto-fix

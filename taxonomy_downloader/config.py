@@ -138,6 +138,7 @@ class ConfigManager:
             config._md5_auto_fix = bool(parsed_args.md5sum_auto_fix)
             config._md5_failed_file = parsed_args.md5sum_auto_fix if parsed_args.md5sum_auto_fix else None
             config._batch_size = parsed_args.batch  # Store batch size for auto-fix
+            self._apply_md5_autofix_resume_options(config, parsed_args)
             return config
         
         # Check for mutual exclusivity between --input and --accession (legacy check, now handled above)
@@ -254,6 +255,36 @@ Examples:
                  "Can be used alone (reads md5_failed_files.txt from current directory) "
                  "or with --md5sum for one-step verification and fixing. "
                  "Optionally specify a custom failed file list path"
+        )
+        parser.add_argument(
+            "--md5sum-auto-fix-no-resume",
+            action="store_true",
+            help="Ignore an existing MD5 auto-fix resume state and start fresh"
+        )
+        parser.add_argument(
+            "--md5sum-auto-fix-new-run",
+            action="store_true",
+            help="Create a new MD5 auto-fix run id for the same verification directory"
+        )
+        parser.add_argument(
+            "--md5sum-auto-fix-retry-failed",
+            action="store_true",
+            help="Retry MD5 auto-fix tasks previously marked failed"
+        )
+        parser.add_argument(
+            "--md5sum-auto-fix-keep-cache",
+            action="store_true",
+            help="Keep the persistent MD5 auto-fix download cache after success"
+        )
+        parser.add_argument(
+            "--md5sum-auto-fix-clear-state",
+            action="store_true",
+            help="Clear existing MD5 auto-fix state before running"
+        )
+        parser.add_argument(
+            "--md5sum-auto-fix-clear-lock",
+            action="store_true",
+            help="Clear a stale MD5 auto-fix lock before running"
         )
         parser.add_argument(
             "--rebuild-md5",
@@ -639,10 +670,21 @@ Examples:
         
         # Store standalone auto-fix mode info in config
         config._standalone_autofix_mode = True
+        config._md5_auto_fix = True
         config._md5_failed_file = str(failed_file_path.resolve())
         config._batch_size = parsed_args.batch  # Store batch size for auto-fix
+        self._apply_md5_autofix_resume_options(config, parsed_args)
         
         return config
+
+    def _apply_md5_autofix_resume_options(self, config: DownloadConfig, parsed_args) -> None:
+        """Attach MD5 auto-fix resume control flags to a config object."""
+        config._md5_auto_fix_no_resume = bool(parsed_args.md5sum_auto_fix_no_resume)
+        config._md5_auto_fix_new_run = bool(parsed_args.md5sum_auto_fix_new_run)
+        config._md5_auto_fix_retry_failed = bool(parsed_args.md5sum_auto_fix_retry_failed)
+        config._md5_auto_fix_keep_cache = bool(parsed_args.md5sum_auto_fix_keep_cache)
+        config._md5_auto_fix_clear_state = bool(parsed_args.md5sum_auto_fix_clear_state)
+        config._md5_auto_fix_clear_lock = bool(parsed_args.md5sum_auto_fix_clear_lock)
     
     def load_taxa_from_file(self, filepath: str) -> List[str]:
         """Load taxonomy names or TaxIDs from input file.

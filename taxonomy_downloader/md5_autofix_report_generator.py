@@ -16,6 +16,7 @@ from taxonomy_downloader.md5_autofix_models import (
     OrganizeResult,
     VerificationResult
 )
+from taxonomy_downloader.md5_autofix_state import AutoFixState
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +144,55 @@ class ReportGenerator:
         except Exception as e:
             logger.error(f"Error writing report to {report_path}: {e}")
             raise
+
+    def generate_resume_report(self, state: AutoFixState) -> Path:
+        """Generate a state-aware report for resumable auto-fix runs."""
+        reports_dir = self.verification_dir / ".md5_autofix_state" / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        report_path = reports_dir / f"redownload_report.{state.run_id}.txt"
+
+        lines = [
+            "=" * 80,
+            "MD5 VERIFICATION AUTO-FIX RESUME REPORT",
+            "=" * 80,
+            "",
+            f"Report Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Run ID: {state.run_id}",
+            f"Verification Directory: {state.verification_dir}",
+            f"State File: {self.verification_dir / '.md5_autofix_state' / 'autofix_state.json'}",
+            "",
+            "SUMMARY",
+            "-" * 80,
+        ]
+
+        for key in sorted(state.summary):
+            lines.append(f"{key}: {state.summary[key]}")
+
+        lines.extend(["", "TASKS", "-" * 80])
+        for task in sorted(state.tasks.values(), key=lambda item: item.original_path):
+            lines.append(f"{task.status.value} | {task.original_path}")
+            if task.accession_id:
+                lines.append(f"  accession: {task.accession_id}")
+            if task.cached_file:
+                lines.append(f"  cached_file: {task.cached_file}")
+            if task.backup_path:
+                lines.append(f"  backup_path: {task.backup_path}")
+            if task.last_error:
+                lines.append(f"  error: {task.last_error}")
+
+        lines.extend(
+            [
+                "",
+                "NEXT RUN",
+                "-" * 80,
+                f"ncbi-genomefetch --md5sum-auto-fix",
+                "",
+            ]
+        )
+
+        report_path.write_text("\n".join(lines), encoding="utf-8")
+        logger.info("State-aware auto-fix report generated: %s", report_path)
+        return report_path
     
     def _generate_header(
         self,

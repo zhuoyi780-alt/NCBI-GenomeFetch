@@ -7,6 +7,7 @@ and moving them to their original paths.
 """
 
 import logging
+import os
 import re
 import shutil
 import zipfile
@@ -15,6 +16,11 @@ from typing import List, Dict, Optional, Tuple
 
 from taxonomy_downloader.md5_autofix_models import FailedFile, OrganizeResult
 from taxonomy_downloader.md5_autofix_filename_simplifier import FilenameSimplifier
+from taxonomy_downloader.md5_autofix_state import (
+    AutoFixStateStore,
+    AutoFixTask,
+    AutoFixTaskStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +187,80 @@ class FileOrganizerAdapter:
         )
         
         return result
+
+    def organize_task(
+        self, task: AutoFixTask, state_store: AutoFixStateStore
+    ) -> bool:
+        """
+        Organize one resumable auto-fix task from persistent cache to target path.
+
+        This task-aware path keeps the downloaded cache intact, creates an audit
+        backup of any replaced target, and records state after each durable step.
+        """
+        try:
+            state_store.update_task(task.task_id, status=AutoFixTaskStatus.ORGANIZING)
+            task = state_store.state.tasks[task.task_id]
+
+            if not task.cached_file:
+                raise FileNotFoundError("Task has no cached_file recorded")
+
+            source_path = self._resolve_inside_verification_dir(
+                task.cached_file, "cached file"
+            )
+            target_path = self._resolve_inside_verification_dir(
+                task.target_path or task.original_path, "target path"
+            )
+
+            if not source_path.exists() or not source_path.is_file():
+                raise FileNotFoundError(f"Cached file not found: {source_path}")
+
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+
+            backup_path = None
+            if target_path.exists():
+                backup_dir = state_store.backups_dir / task.task_id
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                backup_path = backup_dir / f"{target_path.name}.bak"
+                shutil.copy2(str(target_path), str(backup_path))
+
+            tmp_target = target_path.with_name(f".{target_path.name}.md5_autofix_tmp")
+            shutil.copy2(str(source_path), str(tmp_target))
+            os.replace(str(tmp_target), str(target_path))
+
+            update = {
+                "status": AutoFixTaskStatus.ORGANIZED,
+                "target_path": state_store.relative_to_verification_dir(target_path),
+                "last_error": None,
+            }
+            if backup_path is not None:
+                update["backup_path"] = state_store.relative_to_verification_dir(
+                    backup_path
+                )
+            state_store.update_task(task.task_id, **update)
+            logger.info("Organized auto-fix task %s to %s", task.task_id, target_path)
+            return True
+
+        except Exception as exc:
+            logger.error("Failed to organize auto-fix task %s: %s", task.task_id, exc)
+            state_store.update_task(
+                task.task_id,
+                status=AutoFixTaskStatus.FAILED_FATAL,
+                last_error=str(exc),
+            )
+            return False
+
+    def _resolve_inside_verification_dir(self, path_value: str, label: str) -> Path:
+        path = Path(path_value)
+        if not path.is_absolute():
+            path = self.verification_dir / path
+
+        root = self.verification_dir.resolve()
+        resolved = path.resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            raise ValueError(f"{label} is outside verification directory: {path_value}")
+        return resolved
     
     def _discover_downloaded_files(self, temp_dir: Path) -> List[Tuple[str, Path]]:
         """

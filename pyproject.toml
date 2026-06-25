@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ncbi-genomefetch"
-version = "1.0.0"
+version = "1.0.1"
 description = "A command-line tool for batch downloading genome data from NCBI using taxonomy names"
 readme = "README.md"
 license = "MIT"
@@ -24,15 +24,29 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 requires-python = ">=3.8"
+dependencies = [
+    "requests>=2.28.0",
+]
 
-[project.scripts]
-ncbi-genomefetch = "taxonomy_downloader.cli:main"
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "hypothesis>=6.0.0",
+    "pytest-mock>=3.10.0",
+    "black>=22.0.0",
+    "flake8>=5.0.0",
+    "mypy>=1.0.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/zhuoyi780-alt/NCBI-GenomeFetch"
 Repository = "https://github.com/zhuoyi780-alt/NCBI-GenomeFetch"
 Issues = "https://github.com/zhuoyi780-alt/NCBI-GenomeFetch/issues"
 Documentation = "https://github.com/zhuoyi780-alt/NCBI-GenomeFetch/blob/main/README.md"
+
+[project.scripts]
+ncbi-genomefetch = "taxonomy_downloader.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["taxonomy_downloader*"]
